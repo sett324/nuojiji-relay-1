@@ -18,10 +18,11 @@ import { createProactiveStore, PROACTIVE_WINDOW_CAP } from './store/proactiveSto
 import { createKvStore } from './store/kvStore.js';
 import { runGeneration } from './ai/aiCaller.js';
 import { dispatchPush } from './push/pushSender.js';
+import { sendWxPusher } from './push/wxpusher.js';
 import { getVapidPublicKey } from './push/webPush.js';
 import { makeMessageId, nowMs, extractPushBodies } from './util/ids.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 export function createApp() {
     const app = new Hono();
@@ -151,7 +152,6 @@ export function createApp() {
                 //    失败靠手机端轮询 / 控制台 WARN 暴露即可，不打扰用户。
                 if (item.error) return;
                 const subs = await sub.list(inboxId);
-                if (!subs.length) return;
                 const title = meta?.charName || '糯叽机';
                 // 🔒 通知隐私模式（手机端 meta 带来）：正文换「你有一条新消息」，标题/头像保留。
                 const bodies = meta?.notifPrivacy
@@ -166,6 +166,12 @@ export function createApp() {
                         const delay = Math.min(4000, 600 + (body?.length || 0) * 120);
                         await sleep(delay);
                     }
+
+                    // 强制发送 WxPusher (只要配置了变量)
+                    if (c.env.WXPUSHER_APP_TOKEN && c.env.WXPUSHER_UID) {
+                        await sendWxPusher(c.env, title, body);
+                    }
+
                     const payload = {
                         title, body, charId: item.charId, userId: item.userId, kind: 'relay-outbox',
                         // 🖼️ iOS 通知扩展：头像 URL + 发信人 + 会话 id（meta 随手机端 submitGeneration 传来）
@@ -464,8 +470,8 @@ export function createApp() {
         return c.json({ ok: true });
     });
 
-    // 走线下剧情：暂停/恢复该 inbox 的所有主动生成。
-    // 手机端走线下时心跳式 pause（带 durationMs 自动过期，防没发 resume 永久哑火），退出时 resume。
+    // 走线离线剧情：暂停/恢复 inbox 的所有主动生成。
+    // 手机端走离线时心跳 pause（带 durationMs 自动过期，防止没发 resume 永久哑火），退出时 resume。
     app.post('/proactive/pause', async (c) => {
         let body;
         try { body = await c.req.json(); } catch { return c.json({ error: 'invalid json' }, 400); }
