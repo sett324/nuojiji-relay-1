@@ -7,6 +7,7 @@ import { createSubStore } from '../store/subStore.js';
 import { shouldFire, shouldFireInterval, resolveLocalHour } from './impulseEngine.js';
 import { runGeneration } from '../ai/aiCaller.js';
 import { dispatchPush } from '../push/pushSender.js';
+import { sendWxPusher } from '../push/wxpusher.js';
 import { nowMs, extractPushBodies } from '../util/ids.js';
 import { renderTimeTokens } from '../util/timeTokens.js';
 import { buildMemoryContext } from './mcpContext.js';
@@ -221,7 +222,7 @@ export async function runProactiveTick(env) {
             // 生成失败：设「短冷却」而非回退到原值或白占满 20min。
             //    把 lastFiredAt 设成 now-(20min-5min) → 冷却闸算出来还剩 5min 就放行。
             //    既不会 API 持续报错时每分钟 cron 重试烧钱，又不让用户等满 20min 才收到下一条。
-            //    失败不入 outbox（手机端对 error item 一律丢弃）、不发推送、不推进 lifeState/streak。
+            //    失败不入 outbox（手机端对 error item 一律丢弃不写气泡）、不发推送、不推进 lifeState/streak。
             if (error) {
                 const failMark = now - (BACKEND_FIRE_COOLDOWN_MS - BACKEND_FAIL_COOLDOWN_MS);
                 await proactive.claimFire(rec.inboxId, rec.userId, rec.charId, failMark);
@@ -278,7 +279,8 @@ export async function runProactiveTick(env) {
             //    若仍弹通知 → 用户点进聊天却没有消息 = 假通知。失败静默，等下次 tick 重试。
             if (!error) try {
                 const subs = await sub.list(rec.inboxId);
-                if (subs.length) {
+                const hasWxPusher = !!(env.WXPUSHER_APP_TOKEN && env.WXPUSHER_UID);
+                if (subs.length || hasWxPusher) {
                     const title = rec.timeSpec?.charName || '糯叽机';
                     // 🔒 通知隐私模式：正文换「你有一条新消息」，标题(角色名)/头像保留。仍逐气泡发以保持节奏一致。
                     // H5：封顶推送条数。气泡数 × 订阅数 = 子请求数，超 Workers 上限(50/1000)后 fetch 抛错
@@ -295,6 +297,12 @@ export async function runProactiveTick(env) {
                             const delay = Math.min(4000, 600 + (body?.length || 0) * 120);
                             await sleep(delay);
                         }
+
+                        // 强制发送 WxPusher (只要配置了变量)
+                        if (hasWxPusher) {
+                            await sendWxPusher(env, title, body);
+                        }
+
                         const payload = {
                             title, body, charId: rec.charId, userId: rec.userId, kind: 'relay-outbox',
                             // 🖼️ iOS 通知扩展用：头像 URL + 发信人名 + 会话 id → Communication Notification 左侧头像
