@@ -6,7 +6,6 @@
 import { sendWebPush } from './webPush.js';
 import { sendApns } from './apns.js';
 import { sendFcm } from './fcm.js';
-import { sendWxPusher } from './wxpusher.js';
 
 /**
  * @param subscription { channel: 'web'|'apns'|'fcm', ...channel-specific }
@@ -17,17 +16,10 @@ export async function dispatchPush(env, subscription, payload) {
         case 'web':
             return sendWebPush(env, subscription.sub || subscription, payload);
         case 'apns':
+            return sendApns(env, subscription, payload);
         case 'fcm':
-            // 废除 APNs/FCM，只要配置了 WxPusher 就走微信
-            if (env.WXPUSHER_APP_TOKEN && env.WXPUSHER_UID) {
-                return sendWxPusher(env, payload.title, payload.body);
-            }
-            return { ok: false, reason: `unsupported-channel:${subscription.channel}` };
+            return sendFcm(env, subscription, payload);
         default:
-            // 未知通道也尝试微信
-            if (env.WXPUSHER_APP_TOKEN && env.WXPUSHER_UID) {
-                return sendWxPusher(env, payload.title, payload.body);
-            }
             return { ok: false, reason: `unknown-channel:${subscription.channel}` };
     }
 }
